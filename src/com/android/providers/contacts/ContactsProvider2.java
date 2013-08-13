@@ -43,6 +43,7 @@ import android.database.Cursor;
 import android.database.DatabaseUtils;
 import android.database.MatrixCursor;
 import android.database.MatrixCursor.RowBuilder;
+import android.database.MergeCursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteDoneException;
 import android.database.sqlite.SQLiteQueryBuilder;
@@ -156,6 +157,9 @@ import com.google.android.collect.Sets;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
+import com.intel.arkham.ContainerConstants;
+import com.intel.config.FeatureConfig;
+
 import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -239,7 +243,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
     private static final String DEBUG_PROPERTY_KEEP_STALE_ACCOUNT_DATA =
             "debug.contacts.ksad";
 
-    private static final ProfileAwareUriMatcher sUriMatcher =
+    protected static final ProfileAwareUriMatcher sUriMatcher =
             new ProfileAwareUriMatcher(UriMatcher.NO_MATCH);
 
     private static final String FREQUENT_ORDER_BY = DataUsageStatColumns.TIMES_USED + " DESC,"
@@ -370,7 +374,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
     private static final int STREAM_ITEMS_ID_PHOTOS_ID = 21004;
     private static final int STREAM_ITEMS_LIMIT = 21005;
 
-    private static final int DISPLAY_PHOTO_ID = 22000;
+    protected static final int DISPLAY_PHOTO_ID = 22000;
     private static final int PHOTO_DIMENSIONS = 22001;
 
     private static final int DELETED_CONTACTS = 23000;
@@ -1419,7 +1423,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
         return false;
     }
 
-    private boolean initialize() {
+    protected boolean initialize() {
         StrictMode.setThreadPolicy(
                 new StrictMode.ThreadPolicy.Builder().detectAll().penaltyLog().build());
 
@@ -1580,7 +1584,17 @@ public class ContactsProvider2 extends AbstractContactsProvider
                 }
 
                 // Update the accounts for both the contacts and profile DBs.
-                Account[] accounts = AccountManager.get(context).getAccounts();
+                // ARKHAM-635 - use accounts from primary user and containers
+                Account[] accounts = null;
+                if (FeatureConfig.INTEL_FEATURE_ARKHAM == true) {
+                    AccountManager am = AccountManager.get(context);
+                    accounts = am.getAccountsByType(ContainerConstants.ACCOUNT_TYPE_CONTAINER);
+                    if (accounts == null) {
+                        Log.e(TAG, "null container accounts");
+                    }
+                } else {
+                    accounts = AccountManager.get(context).getAccounts();
+                }
                 switchToContactMode();
                 boolean accountsChanged = updateAccountsInBackground(accounts);
                 switchToProfileMode();
@@ -1974,7 +1988,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
      * @param uri The URI to examine.
      * @return Whether to direct the DB operation to the profile database.
      */
-    private boolean mapsToProfileDb(Uri uri) {
+    protected boolean mapsToProfileDb(Uri uri) {
         return sUriMatcher.mapsToProfile(uri);
     }
 
@@ -4947,18 +4961,36 @@ public class ContactsProvider2 extends AbstractContactsProvider
         // Otherwise proceed with a normal query against the contacts DB.
         switchToContactMode();
         String directory = getQueryParameter(uri, ContactsContract.DIRECTORY_PARAM_KEY);
+
+        // ARKHAM 292, 447: First, query container contacts providers if it's the case
+        Cursor[] cursorArray = queryContainerContact(uri, projection, selection, selectionArgs,
+                sortOrder, cancellationSignal);
+        if (cursorArray != null && cursorArray[0] != null) {
+            return cursorArray[0];
+        }
+
+        // Now, also query the current user contacts
+        Cursor myCursor = null;
         if (directory == null) {
-            return addSnippetExtrasToCursor(uri,
-                    queryLocal(uri, projection, selection, selectionArgs, sortOrder, -1,
-                    cancellationSignal));
+            myCursor = addSnippetExtrasToCursor(uri, queryLocal(uri, projection, selection,
+                    selectionArgs, sortOrder, -1, cancellationSignal));
         } else if (directory.equals("0")) {
-            return addSnippetExtrasToCursor(uri,
-                    queryLocal(uri, projection, selection, selectionArgs, sortOrder,
-                    Directory.DEFAULT, cancellationSignal));
+            myCursor = addSnippetExtrasToCursor(uri, queryLocal(uri, projection, selection,
+                    selectionArgs, sortOrder, Directory.DEFAULT, cancellationSignal));
         } else if (directory.equals("1")) {
-            return addSnippetExtrasToCursor(uri,
+            myCursor = addSnippetExtrasToCursor(uri,
                     queryLocal(uri, projection, selection, selectionArgs, sortOrder,
-                    Directory.LOCAL_INVISIBLE, cancellationSignal));
+                            Directory.LOCAL_INVISIBLE, cancellationSignal));
+        }
+
+        // ARKHAM 292, 447: If there were made queries on existing
+        // containers, merge them all into one cursor
+        if (myCursor != null) {
+            if (cursorArray != null) {
+                cursorArray[0] = myCursor;
+                return new MergeCursor(cursorArray);
+            }
+            return myCursor;
         }
 
         DirectoryInfo directoryInfo = getDirectoryAuthority(directory);
@@ -4989,21 +5021,31 @@ public class ContactsProvider2 extends AbstractContactsProvider
             projection = getDefaultProjection(uri);
         }
 
-        Cursor cursor = getContext().getContentResolver().query(directoryUri, projection, selection,
-                selectionArgs, sortOrder);
-
-        if (cursor == null) {
+        myCursor = getContext().getContentResolver().query(directoryUri, projection,
+                selection, selectionArgs, sortOrder);
+        // ARKHAM 292, 447: If there were made queries on existing
+        // containers, merge them all into one cursor
+        if (cursorArray != null) {
+            cursorArray[0] = myCursor;
+            myCursor = new MergeCursor(cursorArray);
+        } else if (myCursor == null) {
             return null;
         }
 
         // Load the cursor contents into a memory cursor (backed by a cursor window) and close the
         // underlying cursor.
         try {
-            MemoryCursor memCursor = new MemoryCursor(null, cursor.getColumnNames());
-            memCursor.fillFromCursor(cursor);
+            MemoryCursor memCursor = new MemoryCursor(null, myCursor.getColumnNames());
+            memCursor.fillFromCursor(myCursor);
             return memCursor;
         } finally {
-            cursor.close();
+            // ARKHAM 292, 447: cleanup
+            if (cursorArray != null) {
+                for (Cursor c : cursorArray) {
+                    c.close();
+                }
+            }
+            myCursor.close();
         }
     }
 
@@ -7465,13 +7507,17 @@ public class ContactsProvider2 extends AbstractContactsProvider
             } else {
                 waitForAccess(mWriteAccessLatch);
             }
-            final AssetFileDescriptor ret;
+            AssetFileDescriptor ret;
             if (mapsToProfileDb(uri)) {
                 switchToProfileMode();
                 ret = mProfileProvider.openAssetFile(uri, mode);
             } else {
                 switchToContactMode();
-                ret = openAssetFileLocal(uri, mode);
+                // ARKHAM-534: Fetch container contact photos through the proxy provider
+                ret = openContainerAssetFile(uri, mode);
+                if (ret == null) {
+                    ret = openAssetFileLocal(uri, mode);
+                }
             }
             success = true;
             return ret;
@@ -8728,4 +8774,15 @@ public class ContactsProvider2 extends AbstractContactsProvider
     public void switchToProfileModeForTest() {
         switchToProfileMode();
     }
+
+    protected Cursor[] queryContainerContact(Uri uri, String[] projection, String selection,
+             String[] selectionArgs,String sortOrder, CancellationSignal cancellationSignal) {
+        return null;
+    }
+
+    protected AssetFileDescriptor openContainerAssetFile(Uri uri, String mode)
+            throws FileNotFoundException {
+        return null;
+    }
+
 }
