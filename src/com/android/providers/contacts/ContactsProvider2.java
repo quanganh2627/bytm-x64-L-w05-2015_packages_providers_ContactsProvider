@@ -157,6 +157,7 @@ import com.google.android.collect.Sets;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
+import com.intel.arkham.ContainerCommons;
 import com.intel.arkham.ContainerConstants;
 import com.intel.config.FeatureConfig;
 
@@ -1325,7 +1326,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
 
     // Depending on whether the action being performed is for the profile, we will use one of two
     // database helper instances.
-    private final ThreadLocal<ContactsDatabaseHelper> mDbHelper =
+    protected final ThreadLocal<ContactsDatabaseHelper> mDbHelper =
             new ThreadLocal<ContactsDatabaseHelper>();
     private ContactsDatabaseHelper mContactsHelper;
     private ProfileDatabaseHelper mProfileHelper;
@@ -2102,7 +2103,17 @@ public class ContactsProvider2 extends AbstractContactsProvider
             return mProfileProvider.delete(uri, selection, selectionArgs);
         } else {
             switchToContactMode();
-            return super.delete(uri, selection, selectionArgs);
+            int ret = super.delete(uri, selection, selectionArgs);
+            if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+                /* ARKHAM-998: If no contact was deleted go further and try to find and
+                 * delete it from container
+                 */
+                if (ret > 0) {
+                    return ret;
+                }
+                return deleteContainerContact(uri, selection, selectionArgs);
+            }
+            return ret;
         }
     }
 
@@ -4702,7 +4713,10 @@ public class ContactsProvider2 extends AbstractContactsProvider
             final List<AccountWithDataSet> accountsWithDataSetsToDelete = Lists.newArrayList();
             for (AccountWithDataSet knownAccountWithDataSet : knownAccountsWithDataSets) {
                 if (knownAccountWithDataSet.isLocalAccount()
-                        || knownAccountWithDataSet.inSystemAccounts(systemAccounts)) {
+                        || knownAccountWithDataSet.inSystemAccounts(systemAccounts)
+                        // ARKHAM-1107 Don't remove accounts of unmounted containers
+                        || ContainerCommons.isUnmountedContainerAccount(
+                                knownAccountWithDataSet.getAccountName())) {
                     continue;
                 }
                 accountsWithDataSetsToDelete.add(knownAccountWithDataSet);
@@ -4915,7 +4929,10 @@ public class ContactsProvider2 extends AbstractContactsProvider
                 final AccountWithDataSet accountWithDataSet = AccountWithDataSet.get(
                         c.getString(0), c.getString(1), null);
                 if (accountWithDataSet.isLocalAccount()
-                        || accountWithDataSet.inSystemAccounts(systemAccounts)) {
+                        || accountWithDataSet.inSystemAccounts(systemAccounts)
+                        // ARKHAM-1107 Don't remove accounts of unmounted containers
+                        || ContainerCommons.isUnmountedContainerAccount(
+                                accountWithDataSet.getAccountName())) {
                     // Account still exists.
                     continue;
                 }
@@ -8774,6 +8791,12 @@ public class ContactsProvider2 extends AbstractContactsProvider
     public void switchToProfileModeForTest() {
         switchToProfileMode();
     }
+
+    /** ARKHAM-998: START */
+    protected int deleteContainerContact(Uri uri, String selection, String[] selectionArgs) {
+        return 0;
+    }
+    /** ARKHAM-998: END */
 
     protected Cursor[] queryContainerContact(Uri uri, String[] projection, String selection,
              String[] selectionArgs,String sortOrder, CancellationSignal cancellationSignal) {
