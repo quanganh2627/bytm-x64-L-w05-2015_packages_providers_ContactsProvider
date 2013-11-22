@@ -115,7 +115,7 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
      */
     static final int DATABASE_VERSION = 710;
 
-    protected static final String DATABASE_NAME = "contacts2.db";
+    private static final String DATABASE_NAME = "contacts2.db";
     private static final String DATABASE_PRESENCE = "presence_db";
 
     public interface Tables {
@@ -758,13 +758,13 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
     private SQLiteStatement mResetNameVerifiedForOtherRawContacts;
     private SQLiteStatement mContactInDefaultDirectoryQuery;
 
-    protected final Context mContext;
+    private final Context mContext;
     private final boolean mDatabaseOptimizationEnabled;
     private final SyncStateContentProviderHelper mSyncState;
     private final CountryMonitor mCountryMonitor;
     private StringBuilder mSb = new StringBuilder();
 
-    protected static ContactsDatabaseHelper sSingleton = null;
+    private static ContactsDatabaseHelper sSingleton = null;
 
     private boolean mUseStrictPhoneNumberComparison;
 
@@ -775,7 +775,7 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
 
     public static synchronized ContactsDatabaseHelper getInstance(Context context) {
         if (sSingleton == null) {
-            sSingleton = new ExtendContactsDatabaseHelper(context, DATABASE_NAME, true);
+            sSingleton = new ContactsDatabaseHelper(context, DATABASE_NAME, true);
         }
         return sSingleton;
     }
