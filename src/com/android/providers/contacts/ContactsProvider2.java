@@ -43,6 +43,7 @@ import android.database.Cursor;
 import android.database.DatabaseUtils;
 import android.database.MatrixCursor;
 import android.database.MatrixCursor.RowBuilder;
+import android.database.MergeCursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteDoneException;
 import android.database.sqlite.SQLiteQueryBuilder;
@@ -156,6 +157,9 @@ import com.google.android.collect.Maps;
 import com.google.android.collect.Sets;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.intel.arkham.ContainerCommons;
+import com.intel.arkham.ContainerConstants;
+import com.intel.config.FeatureConfig;
 
 import libcore.io.IoUtils;
 
@@ -243,7 +247,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
     private static final String DEBUG_PROPERTY_KEEP_STALE_ACCOUNT_DATA =
             "debug.contacts.ksad";
 
-    private static final ProfileAwareUriMatcher sUriMatcher =
+    protected static final ProfileAwareUriMatcher sUriMatcher =
             new ProfileAwareUriMatcher(UriMatcher.NO_MATCH);
 
     private static final String FREQUENT_ORDER_BY = DataUsageStatColumns.TIMES_USED + " DESC,"
@@ -374,7 +378,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
     private static final int STREAM_ITEMS_ID_PHOTOS_ID = 21004;
     private static final int STREAM_ITEMS_LIMIT = 21005;
 
-    private static final int DISPLAY_PHOTO_ID = 22000;
+    protected static final int DISPLAY_PHOTO_ID = 22000;
     private static final int PHOTO_DIMENSIONS = 22001;
 
     private static final int DELETED_CONTACTS = 23000;
@@ -1342,7 +1346,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
 
     // Depending on whether the action being performed is for the profile, we will use one of two
     // database helper instances.
-    private final ThreadLocal<ContactsDatabaseHelper> mDbHelper =
+    protected final ThreadLocal<ContactsDatabaseHelper> mDbHelper =
             new ThreadLocal<ContactsDatabaseHelper>();
     private ContactsDatabaseHelper mContactsHelper;
     private ProfileDatabaseHelper mProfileHelper;
@@ -1440,7 +1444,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
         return false;
     }
 
-    private boolean initialize() {
+    protected boolean initialize() {
         StrictMode.setThreadPolicy(
                 new StrictMode.ThreadPolicy.Builder().detectAll().penaltyLog().build());
 
@@ -1601,7 +1605,17 @@ public class ContactsProvider2 extends AbstractContactsProvider
                 }
 
                 // Update the accounts for both the contacts and profile DBs.
-                Account[] accounts = AccountManager.get(context).getAccounts();
+                // ARKHAM-635 - use accounts from primary user and containers
+                Account[] accounts = null;
+                if (FeatureConfig.INTEL_FEATURE_ARKHAM == true) {
+                    AccountManager am = AccountManager.get(context);
+                    accounts = am.getAccountsByType(ContainerConstants.ACCOUNT_TYPE_CONTAINER);
+                    if (accounts == null) {
+                        Log.e(TAG, "null container accounts");
+                    }
+                } else {
+                    accounts = AccountManager.get(context).getAccounts();
+                }
                 switchToContactMode();
                 boolean accountsChanged = updateAccountsInBackground(accounts);
                 switchToProfileMode();
@@ -2011,7 +2025,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
      * @param uri The URI to examine.
      * @return Whether to direct the DB operation to the profile database.
      */
-    private boolean mapsToProfileDb(Uri uri) {
+    protected boolean mapsToProfileDb(Uri uri) {
         return sUriMatcher.mapsToProfile(uri);
     }
 
@@ -2123,7 +2137,18 @@ public class ContactsProvider2 extends AbstractContactsProvider
             return mProfileProvider.delete(uri, selection, selectionArgs);
         } else {
             switchToContactMode();
-            return super.delete(uri, selection, selectionArgs);
+            if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+                /* ARKHAM-998: If no contact was deleted go further and try to find and
+                 * delete it from container
+                 */
+                int ret = super.delete(uri, selection, selectionArgs);
+                if (ret > 0) {
+                    return ret;
+                }
+                return deleteContainerContact(uri, selection, selectionArgs);
+            } else {
+                return super.delete(uri, selection, selectionArgs);
+            }
         }
     }
 
@@ -4732,9 +4757,19 @@ public class ContactsProvider2 extends AbstractContactsProvider
             // Find the accounts that have been removed.
             final List<AccountWithDataSet> accountsWithDataSetsToDelete = Lists.newArrayList();
             for (AccountWithDataSet knownAccountWithDataSet : knownAccountsWithDataSets) {
-                if (knownAccountWithDataSet.isLocalAccount()
-                        || knownAccountWithDataSet.inSystemAccounts(systemAccounts)) {
-                    continue;
+                if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+                    if (knownAccountWithDataSet.isLocalAccount()
+                            || knownAccountWithDataSet.inSystemAccounts(systemAccounts)
+                            // ARKHAM-1107 Don't remove accounts of unmounted containers
+                            || ContainerCommons.isUnmountedContainerAccount(
+                                    knownAccountWithDataSet.getAccountName())) {
+                        continue;
+                    }
+                } else {
+                    if (knownAccountWithDataSet.isLocalAccount()
+                            || knownAccountWithDataSet.inSystemAccounts(systemAccounts)) {
+                        continue;
+                    }
                 }
                 accountsWithDataSetsToDelete.add(knownAccountWithDataSet);
             }
@@ -4945,10 +4980,21 @@ public class ContactsProvider2 extends AbstractContactsProvider
             while (c.moveToNext()) {
                 final AccountWithDataSet accountWithDataSet = AccountWithDataSet.get(
                         c.getString(0), c.getString(1), null);
-                if (accountWithDataSet.isLocalAccount()
-                        || accountWithDataSet.inSystemAccounts(systemAccounts)) {
-                    // Account still exists.
-                    continue;
+                if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+                    if (accountWithDataSet.isLocalAccount()
+                            || accountWithDataSet.inSystemAccounts(systemAccounts)
+                            // ARKHAM-1107 Don't remove accounts of unmounted containers
+                            || ContainerCommons.isUnmountedContainerAccount(
+                                    accountWithDataSet.getAccountName())) {
+                        // Account still exists.
+                        continue;
+                    }
+                } else {
+                    if (accountWithDataSet.isLocalAccount()
+                            || accountWithDataSet.inSystemAccounts(systemAccounts)) {
+                        // Account still exists.
+                        continue;
+                    }
                 }
 
                 db.execSQL("DELETE FROM " + table +
@@ -4992,18 +5038,53 @@ public class ContactsProvider2 extends AbstractContactsProvider
         // Otherwise proceed with a normal query against the contacts DB.
         switchToContactMode();
         String directory = getQueryParameter(uri, ContactsContract.DIRECTORY_PARAM_KEY);
-        if (directory == null) {
-            return addSnippetExtrasToCursor(uri,
-                    queryLocal(uri, projection, selection, selectionArgs, sortOrder, -1,
-                    cancellationSignal));
-        } else if (directory.equals("0")) {
-            return addSnippetExtrasToCursor(uri,
-                    queryLocal(uri, projection, selection, selectionArgs, sortOrder,
-                    Directory.DEFAULT, cancellationSignal));
-        } else if (directory.equals("1")) {
-            return addSnippetExtrasToCursor(uri,
-                    queryLocal(uri, projection, selection, selectionArgs, sortOrder,
-                    Directory.LOCAL_INVISIBLE, cancellationSignal));
+
+        Cursor[] cursorArray = null;            // Added by ARKHAM 292
+        if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+            // ARKHAM 292, 447: First, query container contacts providers if it's the case
+            cursorArray = queryContainerContact(uri, projection, selection, selectionArgs,
+                    sortOrder, cancellationSignal);
+            if (cursorArray != null && cursorArray[0] != null) {
+                return cursorArray[0];
+            }
+
+            // Now, also query the current user contacts
+            Cursor myCursor = null;
+            if (directory == null) {
+                myCursor = addSnippetExtrasToCursor(uri, queryLocal(uri, projection, selection,
+                        selectionArgs, sortOrder, -1, cancellationSignal));
+            } else if (directory.equals("0")) {
+                myCursor = addSnippetExtrasToCursor(uri, queryLocal(uri, projection, selection,
+                        selectionArgs, sortOrder, Directory.DEFAULT, cancellationSignal));
+            } else if (directory.equals("1")) {
+                myCursor = addSnippetExtrasToCursor(uri,
+                        queryLocal(uri, projection, selection, selectionArgs, sortOrder,
+                                Directory.LOCAL_INVISIBLE, cancellationSignal));
+            }
+
+            // ARKHAM 292, 447: If there were made queries on existing
+            // containers, merge them all into one cursor
+            if (myCursor != null) {
+                if (cursorArray != null) {
+                    cursorArray[0] = myCursor;
+                    return new MergeCursor(cursorArray);
+                }
+                return myCursor;
+            }
+        } else {
+            if (directory == null) {
+                return addSnippetExtrasToCursor(uri,
+                        queryLocal(uri, projection, selection, selectionArgs, sortOrder, -1,
+                        cancellationSignal));
+            } else if (directory.equals("0")) {
+                return addSnippetExtrasToCursor(uri,
+                        queryLocal(uri, projection, selection, selectionArgs, sortOrder,
+                        Directory.DEFAULT, cancellationSignal));
+            } else if (directory.equals("1")) {
+                return addSnippetExtrasToCursor(uri,
+                        queryLocal(uri, projection, selection, selectionArgs, sortOrder,
+                        Directory.LOCAL_INVISIBLE, cancellationSignal));
+            }
         }
 
         DirectoryInfo directoryInfo = getDirectoryAuthority(directory);
@@ -5037,8 +5118,15 @@ public class ContactsProvider2 extends AbstractContactsProvider
         Cursor cursor = getContext().getContentResolver().query(directoryUri, projection, selection,
                 selectionArgs, sortOrder);
 
-        if (cursor == null) {
-            return null;
+        if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+            if (cursorArray != null) {
+                cursorArray[0] = cursor;
+                cursor = new MergeCursor(cursorArray);
+            }
+        } else {
+            if (cursor == null) {
+                return null;
+            }
         }
 
         // Load the cursor contents into a memory cursor (backed by a cursor window) and close the
@@ -5048,6 +5136,14 @@ public class ContactsProvider2 extends AbstractContactsProvider
             memCursor.fillFromCursor(cursor);
             return memCursor;
         } finally {
+            // ARKHAM 292, 447: cleanup
+            if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+                if (cursorArray != null) {
+                    for (Cursor c : cursorArray) {
+                        c.close();
+                    }
+                }
+            }
             cursor.close();
         }
     }
@@ -7540,13 +7636,21 @@ public class ContactsProvider2 extends AbstractContactsProvider
             } else {
                 waitForAccess(mWriteAccessLatch);
             }
-            final AssetFileDescriptor ret;
+            AssetFileDescriptor ret;
             if (mapsToProfileDb(uri)) {
                 switchToProfileMode();
                 ret = mProfileProvider.openAssetFile(uri, mode);
             } else {
                 switchToContactMode();
-                ret = openAssetFileLocal(uri, mode);
+                // ARKHAM-534: Fetch container contact photos through the proxy provider
+                if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+                    ret = openContainerAssetFile(uri, mode);
+                    if (ret == null) {
+                        ret = openAssetFileLocal(uri, mode);
+                    }
+                } else {
+                    ret = openAssetFileLocal(uri, mode);
+                }
             }
             success = true;
             return ret;
@@ -8883,4 +8987,21 @@ public class ContactsProvider2 extends AbstractContactsProvider
     public void switchToProfileModeForTest() {
         switchToProfileMode();
     }
+
+    /** ARKHAM-998: START */
+    protected int deleteContainerContact(Uri uri, String selection, String[] selectionArgs) {
+        return 0;
+    }
+    /** ARKHAM-998: END */
+
+    protected Cursor[] queryContainerContact(Uri uri, String[] projection, String selection,
+            String[] selectionArgs,String sortOrder, CancellationSignal cancellationSignal) {
+        return null;
+    }
+
+    protected AssetFileDescriptor openContainerAssetFile(Uri uri, String mode)
+            throws FileNotFoundException {
+        return null;
+    }
+
 }

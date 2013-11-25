@@ -84,6 +84,7 @@ import com.android.providers.contacts.database.DeletedContactsTableUtil;
 import com.android.providers.contacts.database.MoreDatabaseUtils;
 import com.android.providers.contacts.util.NeededForTesting;
 import com.google.android.collect.Sets;
+import com.intel.config.FeatureConfig;
 
 import java.util.HashMap;
 import java.util.Locale;
@@ -117,7 +118,7 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
      */
     static final int DATABASE_VERSION = 803;
 
-    private static final String DATABASE_NAME = "contacts2.db";
+    protected static final String DATABASE_NAME = "contacts2.db";
     private static final String DATABASE_PRESENCE = "presence_db";
 
     public interface Tables {
@@ -764,13 +765,13 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
     private SQLiteStatement mResetNameVerifiedForOtherRawContacts;
     private SQLiteStatement mContactInDefaultDirectoryQuery;
 
-    private final Context mContext;
+    protected final Context mContext;
     private final boolean mDatabaseOptimizationEnabled;
     private final SyncStateContentProviderHelper mSyncState;
     private final CountryMonitor mCountryMonitor;
     private StringBuilder mSb = new StringBuilder();
 
-    private static ContactsDatabaseHelper sSingleton = null;
+    protected static ContactsDatabaseHelper sSingleton = null;
 
     private boolean mUseStrictPhoneNumberComparison;
 
@@ -781,7 +782,11 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
 
     public static synchronized ContactsDatabaseHelper getInstance(Context context) {
         if (sSingleton == null) {
-            sSingleton = new ContactsDatabaseHelper(context, DATABASE_NAME, true);
+            if (FeatureConfig.INTEL_FEATURE_ARKHAM) {
+                sSingleton = new ExtendContactsDatabaseHelper(context, DATABASE_NAME, true);
+            } else {
+                sSingleton = new ContactsDatabaseHelper(context, DATABASE_NAME, true);
+            }
         }
         return sSingleton;
     }
