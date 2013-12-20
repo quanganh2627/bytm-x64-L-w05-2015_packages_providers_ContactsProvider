@@ -31,7 +31,7 @@ LOCAL_PACKAGE_NAME := ContactsProvider
 LOCAL_CERTIFICATE := shared
 
 ifeq ($(strip $(INTEL_FEATURE_ARKHAM)),true)
-ARKHAM_DIR := vendor/intel/arkham/$(LOCAL_PATH)/enabled
+ARKHAM_DIR := vendor/intel/PRIVATE/arkham/aosp/$(LOCAL_PATH)/enabled
 LOCAL_MODULE := $(LOCAL_PACKAGE_NAME)
 LOCAL_MODULE_CLASS := APPS
 intermediates := $(call local-intermediates-dir)
