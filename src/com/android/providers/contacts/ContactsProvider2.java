@@ -5703,6 +5703,8 @@ public class ContactsProvider2 extends AbstractContactsProvider
                             Phone.SEARCH_DISPLAY_NAME_KEY, true);
                     final boolean searchPhoneNumber = uri.getBooleanQueryParameter(
                             Phone.SEARCH_PHONE_NUMBER_KEY, true);
+                    final boolean smartDialing = uri.getBooleanQueryParameter(
+                            "smart_dialing", false);
 
                     final StringBuilder sb = new StringBuilder();
                     sb.append(" AND (");
@@ -5715,13 +5717,15 @@ public class ContactsProvider2 extends AbstractContactsProvider
                                     FtsQueryBuilder.UNSCOPED_NORMALIZING)
                             : null;
                     if (!TextUtils.isEmpty(ftsMatchQuery)) {
+                        String nameColumn = smartDialing ?
+                                SearchIndexColumns.NAME_PLUS : SearchIndexColumns.NAME;
                         sb.append(Data.RAW_CONTACT_ID + " IN " +
                                 "(SELECT " + RawContactsColumns.CONCRETE_ID +
                                 " FROM " + Tables.SEARCH_INDEX +
                                 " JOIN " + Tables.RAW_CONTACTS +
                                 " ON (" + Tables.SEARCH_INDEX + "." + SearchIndexColumns.CONTACT_ID
                                         + "=" + RawContactsColumns.CONCRETE_CONTACT_ID + ")" +
-                                " WHERE " + SearchIndexColumns.NAME + " MATCH '");
+                                " WHERE " + nameColumn + " MATCH '");
                         sb.append(ftsMatchQuery);
                         sb.append("')");
                         hasCondition = true;
@@ -5737,6 +5741,7 @@ public class ContactsProvider2 extends AbstractContactsProvider
                                     " IN (SELECT DISTINCT " + PhoneLookupColumns.DATA_ID
                                     + " FROM " + Tables.PHONE_LOOKUP
                                     + " WHERE " + PhoneLookupColumns.NORMALIZED_NUMBER + " LIKE '");
+                            sb.append(smartDialing ? "%" : "");
                             sb.append(number);
                             sb.append("%')");
                             hasCondition = true;
@@ -5751,10 +5756,12 @@ public class ContactsProvider2 extends AbstractContactsProvider
                             sb.append("(");
                             sb.append(mimeTypeIsSipExpression);
                             sb.append(" AND ((" + Data.DATA1 + " LIKE ");
-                            DatabaseUtils.appendEscapedSQLString(sb, filterParam + '%');
+                            DatabaseUtils.appendEscapedSQLString(sb, (smartDialing ?
+                                        "%" : "") + filterParam + '%');
                             sb.append(") OR (" + Data.DATA1 + " LIKE ");
                             // Users may want SIP URIs starting from "sip:"
-                            DatabaseUtils.appendEscapedSQLString(sb, "sip:"+ filterParam + '%');
+                            DatabaseUtils.appendEscapedSQLString(sb, "sip:" + (smartDialing ?
+                                        "%" : "") + filterParam + '%');
                             sb.append(")))");
                             hasCondition = true;
                         }

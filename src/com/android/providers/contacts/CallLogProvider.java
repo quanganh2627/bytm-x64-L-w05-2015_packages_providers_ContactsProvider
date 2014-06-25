@@ -16,6 +16,7 @@
 
 package com.android.providers.contacts;
 
+import static com.android.providers.contacts.ContactsDatabaseHelper.CALLS_IMSI;
 import static com.android.providers.contacts.util.DbQueryUtils.checkForSupportedColumns;
 import static com.android.providers.contacts.util.DbQueryUtils.getEqualityClause;
 import static com.android.providers.contacts.util.DbQueryUtils.getInequalityClause;
@@ -88,6 +89,7 @@ public class CallLogProvider extends ContentProvider {
         sCallsProjectionMap.put(Calls.CACHED_NORMALIZED_NUMBER, Calls.CACHED_NORMALIZED_NUMBER);
         sCallsProjectionMap.put(Calls.CACHED_PHOTO_ID, Calls.CACHED_PHOTO_ID);
         sCallsProjectionMap.put(Calls.CACHED_FORMATTED_NUMBER, Calls.CACHED_FORMATTED_NUMBER);
+        sCallsProjectionMap.put(CALLS_IMSI, CALLS_IMSI);
     }
 
     private ContactsDatabaseHelper mDbHelper;

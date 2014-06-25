@@ -38,6 +38,7 @@ import com.google.android.collect.Lists;
 import com.google.common.annotations.VisibleForTesting;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -72,8 +73,26 @@ public class SearchIndexManager {
         public static final int SEPARATOR_SLASH = 2;
         public static final int SEPARATOR_COMMA = 3;
 
+        private static final HashMap<Character, Character> sLetterDigitMap;
+        private static final String sLetterDigitTable =
+            "012abcABC3defDEF4ghiGHI5jklJKL6mnoMNO7pqrsPQRS8tuvTUV9wxyzWXYZ";
+
+        static {
+            sLetterDigitMap = new HashMap<Character, Character>();
+            int length = sLetterDigitTable.length();
+            char key = 0;
+            for (int i = 0; i < length; i++) {
+                char c = sLetterDigitTable.charAt(i);
+                if (c >= '0' && c <= '9') {
+                    key = c;
+                }
+                sLetterDigitMap.put(c, key);
+            }
+        }
+
         private StringBuilder mSbContent = new StringBuilder();
         private StringBuilder mSbName = new StringBuilder();
+        private StringBuilder mSbNamePlus = new StringBuilder();
         private StringBuilder mSbTokens = new StringBuilder();
         private StringBuilder mSbElementContent = new StringBuilder();
         private HashSet<String> mUniqueElements = new HashSet<String>();
@@ -87,6 +106,7 @@ public class SearchIndexManager {
             mSbContent.setLength(0);
             mSbTokens.setLength(0);
             mSbName.setLength(0);
+            mSbNamePlus.setLength(0);
             mSbElementContent.setLength(0);
             mUniqueElements.clear();
         }
@@ -97,6 +117,10 @@ public class SearchIndexManager {
 
         public String getName() {
             return mSbName.length() == 0 ? null : mSbName.toString();
+        }
+
+        public String getNamePlus() {
+            return mSbNamePlus.length() == 0 ? null : mSbNamePlus.toString();
         }
 
         public String getTokens() {
@@ -197,6 +221,9 @@ public class SearchIndexManager {
             // First, put the original name.
             appendNameInternal(name);
 
+            // Put name plus
+            appendNamePlus(name);
+
             // Then, if the name contains more than one FTS token, put each token into the index
             // too.
             //
@@ -222,6 +249,26 @@ public class SearchIndexManager {
                     }
                 }
             }
+        }
+
+        private void appendNamePlus(String name) {
+            StringBuilder sb = new StringBuilder();
+
+            int length = name.length();
+            for (int i = 0; i < length; i++) {
+                char c = name.charAt(i);
+                Character digit = sLetterDigitMap.get(c);
+                if (digit != null) {
+                    sb.append(digit);
+                } else if (c != ' ') {
+                    return;
+                }
+            }
+
+            if (mSbNamePlus.length() != 0) {
+                mSbNamePlus.append(' ');
+            }
+            mSbNamePlus.append(NameNormalizer.normalize(sb.toString()));
         }
 
         /**
@@ -392,6 +439,7 @@ public class SearchIndexManager {
         mValues.clear();
         mValues.put(SearchIndexColumns.CONTENT, builder.getContent());
         mValues.put(SearchIndexColumns.NAME, builder.getName());
+        mValues.put(SearchIndexColumns.NAME_PLUS, builder.getNamePlus());
         mValues.put(SearchIndexColumns.TOKENS, builder.getTokens());
         mValues.put(SearchIndexColumns.CONTACT_ID, contactId);
         db.insert(Tables.SEARCH_INDEX, null, mValues);

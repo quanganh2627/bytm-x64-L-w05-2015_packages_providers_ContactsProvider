@@ -115,10 +115,12 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
      *   800-899 Kitkat
      * </pre>
      */
-    static final int DATABASE_VERSION = 803;
+    static final int DATABASE_VERSION = 10716; //803;
 
     private static final String DATABASE_NAME = "contacts2.db";
     private static final String DATABASE_PRESENCE = "presence_db";
+
+    public static final String CALLS_IMSI = "imsi";
 
     public interface Tables {
         public static final String CONTACTS = "contacts";
@@ -667,6 +669,7 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
         public static final String CONTACT_ID = "contact_id";
         public static final String CONTENT = "content";
         public static final String NAME = "name";
+        public static final String NAME_PLUS = "name_plus";
         public static final String TOKENS = "tokens";
     }
 
@@ -1289,6 +1292,7 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
                 Calls.CACHED_NORMALIZED_NUMBER + " TEXT," +
                 Calls.CACHED_PHOTO_ID + " INTEGER NOT NULL DEFAULT 0," +
                 Calls.CACHED_FORMATTED_NUMBER + " TEXT," +
+                CALLS_IMSI + " TEXT," +
                 Voicemails._DATA + " TEXT," +
                 Voicemails.HAS_CONTENT + " INTEGER," +
                 Voicemails.MIME_TYPE + " TEXT," +
@@ -1401,6 +1405,7 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
                     + SearchIndexColumns.CONTACT_ID + " INTEGER REFERENCES contacts(_id) NOT NULL,"
                     + SearchIndexColumns.CONTENT + " TEXT, "
                     + SearchIndexColumns.NAME + " TEXT, "
+                    + SearchIndexColumns.NAME_PLUS + " TEXT, "
                     + SearchIndexColumns.TOKENS + " TEXT"
                 + ")");
         if (rebuildSqliteStats) {
@@ -2028,6 +2033,8 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
         boolean rebuildSqliteStats = false;
         boolean upgradeLocaleSpecificData = false;
 
+        boolean upgradeToDsdsVersion = true;
+
         if (oldVersion == 99) {
             upgradeViewsAndTriggers = true;
             oldVersion++;
@@ -2430,7 +2437,11 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
             oldVersion = 625;
         }
 
-        if (oldVersion < 626) {
+        if (oldVersion <= 627) {
+            if (oldVersion != 625) {
+                // Version 626 and 627 is assigned for R3
+                upgradeToDsdsVersion = false;
+            }
             upgradeToVersion626(db);
             upgradeViewsAndTriggers = true;
             oldVersion = 626;
@@ -2524,6 +2535,27 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
             // now indexed as names.
             upgradeSearchIndex = true;
             oldVersion = 803;
+        }
+
+        if (oldVersion == 1704 || oldVersion == 10704 || oldVersion == 10705) {
+            // Version 1704, 10704 and 10705 is assigned for R4
+            upgradeToDsdsVersion = false;
+        }
+
+        if (oldVersion < 10715) {
+            upgradeToDsdsVersion = false;
+            // Add name_plus column for smart dialing
+            upgradeSearchIndex = true;
+            oldVersion = 10715;
+        }
+
+        if (oldVersion < 10716) {
+            if (upgradeToDsdsVersion) {
+                upgradeToDsdsVersion(db);
+            }
+            // Add name_plus column for smart dialing
+            upgradeSearchIndex = true;
+            oldVersion = 10716;
         }
 
         if (upgradeViewsAndTriggers) {
@@ -4025,6 +4057,10 @@ public class ContactsDatabaseHelper extends SQLiteOpenHelper {
                 ContactsContract.PinnedPositions.UNPINNED + ";");
         db.execSQL("ALTER TABLE raw_contacts ADD pinned INTEGER NOT NULL DEFAULT  " +
                 ContactsContract.PinnedPositions.UNPINNED + ";");
+    }
+
+    private void upgradeToDsdsVersion(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE calls ADD imsi TEXT DEFAULT NULL;");
     }
 
     public String extractHandleFromEmailAddress(String email) {
